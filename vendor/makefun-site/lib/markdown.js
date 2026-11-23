@@ -136,28 +136,31 @@ function findSingleStar(s, from) {
 /** `s` rendered inline; `env.link(target)` is a link's href. */
 export function inline(s, env) {
   let out = '';
-  // Accumulate runs of ordinary characters and escape them once per run instead
-  // of once per character. A literal marker that fails to open a construct is a
-  // normal character too (escapeHtml leaves `*`, backtick and `[` untouched).
-  let buf = '';
+  // Track the start index of the current run of ordinary characters rather than
+  // appending char-by-char. A literal marker that fails to open a construct is a
+  // normal character too — it simply stays inside [runStart, i) and is sliced
+  // once at the next construct boundary. This eliminates one temporary string
+  // per character (and the resulting GC pressure).
+  let runStart = 0;
   let i = 0;
-  const flush = () => { if (buf !== '') { out += escapeHtml(buf); buf = ''; } };
+  const flush = (end) => { if (end > runStart) { out += escapeHtml(s.slice(runStart, end)); } };
   while (i < s.length) {
     const c = s[i];
     if (c === '\\' && i + 1 < s.length && ESCAPABLE.has(s[i + 1])) {
-      flush();
+      flush(i);
       out += escapeHtml(s[i + 1]);
       i += 2;
+      runStart = i;
       continue;
     }
     if (c === '`') {
       const j = s.indexOf('`', i + 1);
       if (j > i + 1) {
-        flush();
+        flush(i);
         out += `<code>${escapeHtml(s.slice(i + 1, j))}</code>`;
         i = j + 1;
+        runStart = i;
       } else {
-        buf += '`';
         i++;
       }
       continue;
@@ -166,22 +169,22 @@ export function inline(s, env) {
       if (s[i + 1] === '*') {
         const j = findUnescaped(s, '**', i + 2);
         if (j > i + 2) {
-          flush();
+          flush(i);
           out += `<strong>${inline(s.slice(i + 2, j), env)}</strong>`;
           i = j + 2;
+          runStart = i;
         } else {
-          buf += '**';
           i += 2;
         }
         continue;
       }
       const j = findSingleStar(s, i + 1);
       if (j > i + 1) {
-        flush();
+        flush(i);
         out += `<em>${inline(s.slice(i + 1, j), env)}</em>`;
         i = j + 1;
+        runStart = i;
       } else {
-        buf += '*';
         i++;
       }
       continue;
@@ -191,19 +194,18 @@ export function inline(s, env) {
       const m = k !== -1 && s[k + 1] === '(' ? s.indexOf(')', k + 2) : -1;
       const target = m === -1 ? '' : s.slice(k + 2, m);
       if (target !== '' && !/\s/.test(target)) {
-        flush();
+        flush(i);
         out += `<a href="${escapeHtml(env.link(target))}">${inline(s.slice(i + 1, k), env)}</a>`;
         i = m + 1;
+        runStart = i;
         continue;
       }
-      buf += '[';
       i++;
       continue;
     }
-    buf += c;
     i++;
   }
-  flush();
+  flush(s.length);
   return out;
 }
 
